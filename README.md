@@ -1,1 +1,1 @@
-# Interleaved-Multithreading
+# Riscv-Interleaved-Multithreading
