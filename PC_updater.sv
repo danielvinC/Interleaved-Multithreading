@@ -65,13 +65,16 @@ module EXE_BTB #(parameter WIDTH = 8)
     logic [THREAD_POOL_SIZE-1:0] THEAD_BR_SL_n, THEAD_BR_SL_q;
 
     always @* begin
-        // Initialize intermediate signals
-        PC_BR_taken_n = 32'b0;
-        THEAD_BR_SL_n = 4'b0;
+        
+        PC_br = PC_BR_taken_q;
+        thread_sl = THEAD_BR_SL_q;
 
         if (EXE_BR_TAKEN) begin
             PC_BR_taken_n = EXE_br_addr;
             THEAD_BR_SL_n = TID_EXE[1] ? (TID_EXE[0] ? PC_T3 : PC_T2) : (TID_EXE[0] ? PC_T1 : PC_T0);
+        end else begin
+            PC_BR_taken_n = 32'b0;
+            THEAD_BR_SL_n = 4'b0;
         end
     end
 
