@@ -3,65 +3,54 @@
 */
 import fgmt::*;
 module L1_cache #(
-    parameter CTID = 0) 
+    parameter logic [1:0] CTID = 2'b0) 
     (
-    // Clock and Asynchronous reset active
-    input logic clk,        
+    //input from processor
+    input logic clock,        
     input logic reset,      
-    /********************************/
-    //Program Counter
-    input word  PCF,   
-    //
-    input word block_addr_rst,
-    //the index of active thread to be fetched                             
-    input logic [TID_bits-1:0] TID_fetch,
-    /********************************/
-    //Thread ID and Instruction address for branch prefetching - interacts directly with the fifo branch target
-    input word br_target, 
-    input logic [TID_bits-1:0] tid_br,
-    /********************************/
-    //Thread ID and address of line instruction from L2 Cache
-    input word PC_L2_i,
-    input logic [TID_bits-1:0] tid_from_l2,
-    /********************************/
-    //Data response form L2 Cache
-    input line l2_cache_block_rsp,
-    input logic rsp_valid, 
-    /********************************/
-    //the branch request
-    output logic br_req, 
-    /********************************/
-    //prefetching request
-    output logic req_spec, 
-    /********************************/
-    //refill request
-    output logic req_refill,
-    /********************************/
-    //hit = 1 -> found in L1 Cache, hit = 0 -> not found in L1 Cache     
+    input word  PCF,                        //Program Counter
+    input word addr_rst,                    //reset address              
+    input logic [TID_bits-1:0] tid_fetch,   //the index of active thread 
+    input word br_target,                   //address of branch instruction
+    input logic [TID_bits-1:0] tid_br,      //the index of branch thread
+    //input from L2 cache
+    input word l2addr,                      //l2 address response
+    input logic [TID_bits-1:0] l2_tid,      //l2 thread ID response
+    input line l2_line,                     //data coming from l2
+    input logic l2_valid_rsp,               //valid response from l2
+    //output to L2 cache
+    output logic br_req,                    //the branch request
+    output logic req_spec,                  //prefetching request 
+    output logic req_refill,                //refill request. If 1 -> threre is a miss, 0 -> threre is a hit
+    //output to processor
     output logic hit,
-    /********************************/
-    // instruction output port -> to processor decode stage
-    output word instr
+    output word instr                       //instruction output port -> to processor decode stage
     );
-    /************************************************************************************************************************************/
+
     // ----------
     // Registers
     // ----------
-    logic active;   //thread active
-    word i_addr, instr_required; //instruction address to be fetched
-    
-    line cache_line;    // storage of line response from L2
-    logic br_valid, cache_update_signal;
 
-    word block_addr;
-    integer block_offset;  //the offset...to extract the particular word from a block to be fetched
-    block l1_block_memory;  // icache
-    /********************************/
-    assign br_valid = (tid_br == CTID); 
-    assign cache_update_valid   = rsp_valid        && (tid_from_l2 == CTID);
-    assign active               = (TID_fetch == CTID);
-    /************************************************************************************************************************************/
-    /* FUNCTIONS */
+    logic active;                    //thread active
+    word  i_addr, instr_required;    //instruction address 
+    
+    line  cache_line;                //l2 line response storage
+    logic cache_update_valid;
+
+
+    logic   br_valid;
+    word    tag_bit;                 //{[31:4] l2addr, 4'b0} 
+    integer icount;           
+
+    block   l1_block_memory;         //icache 
+
+    // output assignments of internal registers
+    assign br_valid             = (tid_br==CTID); 
+    assign cache_update_valid   = l2_valid_rsp && (l2_tid==CTID);
+    assign active               = (tid_fetch==CTID);
+
+
+    // FUNCTIONS 
     function block line_to_word(input line data);
         automatic block instr;
         for (int i = 0; i < block_size; i++) begin
@@ -87,44 +76,38 @@ module L1_cache #(
     endfunction
     
     /************************************************************************************************************************************/
-    ///////////////////// MAIN BODY ////////////////////////
+    ///////////////////////////////////////////////////////////// MAIN BODY //////////////////////////////////////////////////////////////
+
+
     always_comb begin : cache_buffer
-        /********************************/
-        //instruction block update
-        l1_block_memory = cache_update_valid ? line_to_word(l2_cache_block_rsp) : line_to_word(cache_line);
-        /********************************/
-        //if the address instruction matches the location in L1 Cache..then the address is found in L1 Cache
-        hit = (i_addr[31:4] == block_addr[31:4]);
-        //
-        block_offset = offset_selector(i_addr[3:0]);
-        //
-        instr_required = instr_selector(block_offset, l1_block_memory);
-        //hit = 1 -> found the required instruction -> complete
-        //hit = 0 ->  not found the required instruction -> generates a bubble in the pipeline
-        instr = hit ? instr_required : bubble;
-        /********************************/
-        //trigger refill request
-        req_refill = ~hit; 
-        //trigger prefetching request
-        req_spec = (block_offset == 3);
-        //update fetch address instruction and determine if there was a branch instruction
-        i_addr = (active) ? PCF : br_valid ? br_target : clear;
-		  br_req = 1'b0;
-        if (br_valid) begin
-            //trigger branch prefetching request
-            br_req = (i_addr[31:4] != block_addr[31:4]);
-        end else begin
-            br_req = (active) ? clear : (i_addr[31:4] != block_addr[31:4]) ? br_req : clear;
-        end
+        //////////INPUT//////////
+
+        //update l1 cache
+        l1_block_memory       = cache_update_valid ? line_to_word(l2_line) : line_to_word(cache_line);
+
+        //update required instruction
+        i_addr                = active ? PCF : br_valid ? br_target : 1'b0;
+        icount                = offset_selector(i_addr[3:0]);
+        instr_required        = instr_selector(icount, l1_block_memory);
+
+        //////////OUTPUT/////////
+
+        hit         = (i_addr[31:4] == tag_bit[31:4]);
+        instr       = hit ? instr_required : bubble;
+        req_refill  = active && !hit ; 
+        req_spec    = active && (icount == 3);
+        br_req      = 1'b0; //default
+        if(active)
+            br_req = 1'b0;
+        else 
+            br_req = (br_valid) ? 1'b1 : (i_addr[31:4]!=tag_bit[31:4]) ? br_req : 1'b0;   //set: new branch taken
     end
-    /************************************************************************************************************************************/
-    always_ff @(posedge clk) begin 
-        if (cache_update_valid) begin
-            cache_line  <= l2_cache_block_rsp;
-            block_addr <= PC_L2_i;
-        end else if (reset) begin
-            cache_line <=  128'h0;
-            block_addr <= block_addr_rst;
-        end 
+
+
+    always_ff @(posedge clock ) begin 
+	    if (reset)  {tag_bit, cache_line} <= 140'h0;
+        //update data
+        else if(cache_update_valid) {tag_bit, cache_line} <= {l2addr, l2_line};
+        else                        {tag_bit, cache_line} <= {tag_bit, cache_line};
     end
 endmodule
