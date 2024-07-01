@@ -57,9 +57,9 @@ module L1_cache #(
     integer block_offset;  //the offset...to extract the particular word from a block to be fetched
     block l1_block_memory;  // icache
     /********************************/
-    assifn br_valid = (tid_br == CTID) ? set : (i_addr != block_addr) ? br_valid : clear; 
+    assign br_valid = (tid_br == CTID); 
     assign cache_update_valid   = rsp_valid        && (tid_from_l2 == CTID);
-    assign active               = TID_fetch == CTID;
+    assign active               = (TID_fetch == CTID);
     /************************************************************************************************************************************/
     /* FUNCTIONS */
     function block line_to_word(input line data);
@@ -77,6 +77,7 @@ module L1_cache #(
                 4'b0100: instr_sl = 1;
                 4'b1000: instr_sl = 2;
                 4'b1100: instr_sl = 3;
+                default: instr_sl = 0;
             endcase
         return instr_sl;
     endfunction
@@ -106,28 +107,24 @@ module L1_cache #(
         req_refill = ~hit; 
         //trigger prefetching request
         req_spec = (block_offset == 3);
-        //defaults
-        i_addr = 32'h0;
-        br_req = clear;
-        if (active) begin
-            //update fetch address instruction 
-            i_addr = PCF;
-            br_req = clear;
-        end else if (br_valid) begin
-            //determine if there was a branch instruction
-            i_addr = br_target;
+        //update fetch address instruction and determine if there was a branch instruction
+        i_addr = (active) ? PCF : br_valid ? br_target : clear;
+		  br_req = 1'b0;
+        if (br_valid) begin
             //trigger branch prefetching request
             br_req = (i_addr[31:4] != block_addr[31:4]);
+        end else begin
+            br_req = (active) ? clear : (i_addr[31:4] != block_addr[31:4]) ? br_req : clear;
         end
     end
     /************************************************************************************************************************************/
     always_ff @(posedge clk) begin 
         if (cache_update_valid) begin
             cache_line  <= l2_cache_block_rsp;
-            block_address <= PC_L2_i;
+            block_addr <= PC_L2_i;
         end else if (reset) begin
             cache_line <=  128'h0;
-            block_address <= block_addr_rst;
+            block_addr <= block_addr_rst;
         end 
     end
 endmodule
